@@ -1,0 +1,47 @@
+name: Telegram-post
+on:
+  push:
+    branches: [main]
+    paths: ['outbox/**']
+permissions:
+  contents: read
+concurrency:
+  group: telegram
+  cancel-in-progress: false
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Skicka nya inlagg till Telegram
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          files=$(jq -r '[.commits[].added[]] | unique | .[] | select(startswith("outbox/") and endswith(".json"))' "$GITHUB_EVENT_PATH")
+          if [ -z "$files" ]; then echo "Inga nya inlagg"; exit 0; fi
+          n=0
+          while IFS= read -r f; do
+            n=$((n+1))
+            if [ "$n" -gt 3 ]; then echo "Fler an 3 inlagg i samma push - stoppar"; exit 1; fi
+            curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "https://raw.githubusercontent.com/$REPO/$SHA/$f" -o post.json
+            typ=$(jq -r '.typ' post.json)
+            text=$(jq -r '.text' post.json)
+            if [ "$typ" = "bild" ]; then
+              bild=$(jq -r '.bild' post.json)
+              if ! [[ "$bild" =~ ^bilder/[A-Za-z0-9_.-]+\.png$ ]] || [[ "$bild" == *..* ]]; then echo "Ogiltig bildsokvag i $f"; exit 1; fi
+              curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "https://raw.githubusercontent.com/$REPO/$SHA/$bild" -o bild.png
+              svar=$(curl -sS -X POST "https://api.telegram.org/bot$TG_TOKEN/sendPhoto" --form-string chat_id="$TG_CHAT" -F photo=@bild.png --form-string caption="$text")
+            elif [ "$typ" = "text" ]; then
+              svar=$(curl -sS -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" --data-urlencode chat_id="$TG_CHAT" --data-urlencode text="$text")
+            else
+              echo "Okand typ i $f"; exit 1
+            fi
+            if ! echo "$svar" | jq -e '.ok == true' >/dev/null; then
+              echo "Telegram svarade fel for $f: $(echo "$svar" | jq -r '.description // "okant fel"')"; exit 1
+            fi
+            echo "Skickat: $f"
+          done <<< "$files"

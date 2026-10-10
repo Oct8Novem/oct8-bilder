@@ -19,15 +19,21 @@ jobs:
           TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          files=$(jq -r '[.commits[].added[]] | unique | .[] | select(startswith("outbox/") and endswith(".json"))' "$GITHUB_EVENT_PATH")
+          api="https://api.github.com/repos/$REPO"
+          if [[ -z "${BEFORE:-}" || "$BEFORE" =~ ^0+$ ]]; then url="$api/commits/$SHA"; else url="$api/compare/$BEFORE...$SHA"; fi
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$url" -o diff.json
+          files=$(jq -r '[.files[]? | select(.status == "added") | .filename] | unique | .[] | select(startswith("outbox/") and endswith(".json"))' diff.json)
           if [ -z "$files" ]; then echo "Inga nya inlagg"; exit 0; fi
           n=0
           while IFS= read -r f; do
             n=$((n+1))
             if [ "$n" -gt 3 ]; then echo "Fler an 3 inlagg i samma push - stoppar"; exit 1; fi
             curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "https://raw.githubusercontent.com/$REPO/$SHA/$f" -o post.json
+            if ! jq -e 'type == "object" and (.typ | type == "string") and (.text | type == "string")' post.json >/dev/null 2>&1; then echo "Ogiltig JSON i $f"; exit 1; fi
             typ=$(jq -r '.typ' post.json)
             text=$(jq -r '.text' post.json)
             if [ "$typ" = "bild" ]; then

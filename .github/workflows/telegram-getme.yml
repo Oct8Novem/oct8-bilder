@@ -1,0 +1,21 @@
+name: Telegram-test (getMe)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  getme:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: getMe (postar inget)
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          svar=$(curl -sS "https://api.telegram.org/bot$TG_TOKEN/getMe")
+          if echo "$svar" | jq -e '.ok == true' >/dev/null; then
+            echo "GRONT: @$(echo "$svar" | jq -r '.result.username')"
+          else
+            echo "ROTT: $(echo "$svar" | jq -r '.description // "okant fel"')"; exit 1
+          fi
